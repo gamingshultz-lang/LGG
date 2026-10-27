@@ -162,6 +162,19 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
 .check-intro p { margin: 7px 0 0; color: #839087; font-size: 10px; }
 .check-panel { display: grid; grid-template-columns: 1fr 1.06fr; gap: 25px; margin-top: 20px; }
 .draw-input-area { padding-right: 23px; border-right: 1px solid #edf0eb; }
+.contest-lookup { display: flex; gap: 8px; margin-top: 8px; }
+.contest-lookup > input { min-width: 0; width: 120px; height: 40px; padding: 0 10px; border: 1px solid #e4e9e2; border-radius: 5px; outline: none; color: #3c5141; background: #fdfefd; font: 11px 'DM Mono', monospace; }
+.contest-lookup > input:focus { border-color: #80ae8b; box-shadow: 0 0 0 3px rgba(66, 135, 80, .08); }
+.contest-lookup > .primary-button { width: auto; min-width: 150px; margin: 0; padding: 0 12px; }
+.contest-loaded { display: flex; align-items: center; gap: 6px; margin-top: 9px; color: #34794c; font-size: 9px; }
+.loaded-numbers { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 13px; }
+.loaded-numbers .field-label { flex-basis: 100%; margin-bottom: 3px; }
+.loaded-numbers > span:not(.field-label) { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: #34774d; background: #eaf3e9; font: 8px 'DM Mono', monospace; }
+.manual-draw { margin-top: 15px; border-top: 1px solid #edf0eb; padding-top: 11px; }
+.manual-draw summary { color: #647568; font-size: 9px; cursor: pointer; }
+.manual-draw > .field-label { margin-top: 12px; }
+.manual-draw .check-button { max-width: 188px; }
+.contest-lookup .primary-button:disabled { opacity: .7; }
 .draw-input-area textarea { display: block; width: 100%; min-height: 70px; resize: vertical; margin-top: 8px; padding: 10px 11px; border: 1px solid #e4e9e2; border-radius: 5px; outline: none; color: #3c5141; background: #fdfefd; font: 10px/1.6 'DM Mono', monospace; }
 .draw-input-area textarea:focus { border-color: #80ae8b; box-shadow: 0 0 0 3px rgba(66, 135, 80, .08); }
 .draw-input-area textarea::placeholder { color: #adb6ad; }
@@ -185,6 +198,32 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
 .success-check { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #34794c; background: #e1f1e2; }
 .text-button { display: flex; align-items: center; gap: 6px; border: 0; color: #6d806f; background: transparent; font-size: 9px; }
 .text-button:hover { color: #2f7048; }
+
+.final-result { margin-top: 22px; padding: 22px 24px 17px; border: 1px solid #dfe9df; border-radius: 8px; background: #f7faf6; }
+.final-result-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.final-result-heading h2 { margin: 5px 0 0; color: #263d2d; font: 600 17px 'Manrope', sans-serif; }
+.result-games-count { color: #58735d; font-size: 10px; }
+.final-totals { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.final-totals > div { min-height: 65px; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 10px 12px; border: 1px solid #e5ebe3; border-radius: 5px; background: #fff; }
+.final-totals span { color: #859087; font-size: 9px; }
+.final-totals strong { color: #35473a; font: 600 14px 'DM Mono', monospace; }
+.final-totals .positive-balance strong, .final-totals .positive-balance span { color: #23734b; }
+.final-totals .negative-balance strong { color: #a7493d; }
+.balance-note { margin: 11px 0 0; color: #929b93; font-size: 8px; }
+.hit-breakdown { margin-top: 21px; padding-top: 16px; border-top: 1px solid #e4ebe2; }
+.hit-breakdown-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.hit-breakdown-heading h3 { margin: 0; color: #344a39; font: 600 13px 'Manrope', sans-serif; }
+.hit-breakdown-heading > span { color: #879389; font-size: 9px; }
+.hit-breakdown-scroll { max-height: 340px; overflow: auto; border: 1px solid #e5ebe3; border-radius: 5px; background: #fff; scrollbar-color: #bdcbbb #edf1eb; scrollbar-width: thin; }
+.hit-breakdown table { width: 100%; border-collapse: collapse; text-align: left; }
+.hit-breakdown th, .hit-breakdown td { padding: 8px 11px; border-bottom: 1px solid #edf0eb; color: #657369; font-size: 9px; }
+.hit-breakdown thead th { position: sticky; top: 0; color: #647568; background: #f5f8f3; font-size: 8px; font-weight: 600; z-index: 1; }
+.hit-breakdown tbody th { color: #45594a; font-weight: 600; }
+.hit-breakdown tbody tr:last-child th, .hit-breakdown tbody tr:last-child td { border-bottom: 0; }
+.hit-breakdown tbody td:last-child { color: #536959; font-family: 'DM Mono', monospace; }
+.hit-breakdown tbody tr.winning-tier { background: #f6faf5; }
+.hit-breakdown tbody tr.winning-tier td:last-child { color: #26734a; font-weight: 600; }
+.hit-breakdown > .balance-note { margin-top: 9px; }
 
 .responsible-note { display: flex; align-items: center; gap: 12px; margin-top: 23px; padding: 14px 17px; border: 1px solid #e5eae3; border-radius: 6px; background: #f9faf7; }
 .responsible-icon { display: grid; place-items: center; flex: 0 0 auto; width: 29px; height: 29px; border-radius: 50%; color: #788e7b; background: #edf2eb; }
@@ -210,6 +249,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
   .game-card { padding-left: 15px; padding-right: 15px; }
   .check-panel { grid-template-columns: 1fr; gap: 20px; }
   .draw-input-area { padding-right: 0; padding-bottom: 18px; border-right: 0; border-bottom: 1px solid #edf0eb; }
+  .final-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .footer { padding-right: 24px; padding-left: 24px; }
 }
 @media (max-width: 640px) {
@@ -244,6 +284,12 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
   .game-card-foot { font-size: 7px; }
   .result-pill b { font-size: 8px; }
   .check-section { margin-top: 30px; padding: 20px 17px; }
+  .contest-lookup > input { flex: 1; width: 0; }
+  .contest-lookup > .primary-button { min-width: 135px; padding: 0 8px; }
+  .final-result { padding: 18px 15px 14px; }
+  .final-result-heading { align-items: flex-start; flex-direction: column; }
+  .hit-breakdown-heading { align-items: flex-start; flex-direction: column; }
+  .hit-breakdown th, .hit-breakdown td { padding: 8px 6px; font-size: 8px; }
   .prize-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 11px; }
   .check-result-bar { align-items: flex-start; gap: 9px; }
   .check-result-bar > div { flex-wrap: wrap; gap: 6px; }

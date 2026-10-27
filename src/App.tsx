@@ -3,6 +3,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 type Model = 'balanced' | 'diversified' | 'random';
 type Game = { id: number; numbers: number[] };
 type PrizeBand = 11 | 12 | 13 | 14 | 15;
+type GameResult = { hits: number; prize: number; winningTickets: number };
+type ContestInfo = { number: number; date: string };
+type CaixaPrize = { faixa?: number; descricaoFaixa?: string; valorPremio?: number };
+type CaixaContest = {
+  numero?: number;
+  dataApuracao?: string;
+  listaDezenas?: string[];
+  listaRateioPremio?: CaixaPrize[];
+};
 
 const BASE_PRICE = 3.5;
 const MAX_GAMES = 10_000;
@@ -42,6 +51,38 @@ function parseDraw(value: string): number[] | null {
     return null;
   }
   return numbers;
+}
+
+function getContestPrize(prizes: CaixaPrize[], band: PrizeBand): number | undefined {
+  const prize = prizes.find((item) => {
+    const descriptionBand = Number(item.descricaoFaixa?.match(/\d+/)?.[0]);
+    return descriptionBand === band || item.faixa === 16 - band;
+  })?.valorPremio;
+  return typeof prize === 'number' && Number.isFinite(prize) && prize >= 0
+    ? prize
+    : undefined;
+}
+
+function calculateGameResult(
+  game: Game,
+  draw: number[],
+  prizes: Record<PrizeBand, number>,
+): GameResult {
+  const hits = game.numbers.reduce(
+    (total, number) => total + (draw.includes(number) ? 1 : 0),
+    0,
+  );
+  let prize = 0;
+  let winningTickets = 0;
+
+  for (const band of PRIZE_BANDS) {
+    const winningTicketsInBand =
+      choose(hits, band) * choose(game.numbers.length - hits, 15 - band);
+    winningTickets += winningTicketsInBand;
+    prize += winningTicketsInBand * prizes[band];
+  }
+
+  return { hits, prize, winningTickets };
 }
 
 function Icon({
@@ -84,6 +125,10 @@ function App() {
   const [games, setGames] = useState<Game[]>([]);
   const [drawText, setDrawText] = useState('');
   const [drawSubmitted, setDrawSubmitted] = useState<number[] | null>(null);
+  const [contestNumber, setContestNumber] = useState('');
+  const [contestInfo, setContestInfo] = useState<ContestInfo | null>(null);
+  const [contestError, setContestError] = useState('');
+  const [isLoadingContest, setIsLoadingContest] = useState(false);
   const [prizes, setPrizes] = useState<Record<PrizeBand, number>>({
     11: 6,
     12: 12,
@@ -93,11 +138,14 @@ function App() {
   });
   const [error, setError] = useState('');
   const [generationError, setGenerationError] = useState('');
+  const [contestPrizeError, setContestPrizeError] = useState('');
+  const [isOfficialPrizeRate, setIsOfficialPrizeRate] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [listWidth, setListWidth] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const gameListRef = useRef<HTMLDivElement>(null);
   const generationWorkerRef = useRef<Worker | null>(null);
+  const contestRequestRef = useRef<AbortController | null>(null);
   const parsedDraw = useMemo(() => parseDraw(drawText), [drawText]);
   const ticketCount = choose(numberCount, 15);
   const gameCost = unitPrice * ticketCount;
@@ -107,6 +155,37 @@ function App() {
     diversified: 'Diversificado',
     random: 'Aleatório',
   }[model];
+  const gameResults = useMemo(
+    () =>
+      drawSubmitted
+        ? games.map((game) => calculateGameResult(game, drawSubmitted, prizes))
+        : [],
+    [drawSubmitted, games, prizes],
+  );
+  const totalPrize = gameResults.reduce((total, result) => total + result.prize, 0);
+  const gamesWithHitsCount = gameResults.filter((result) => result.hits > 0).length;
+  const winningGameCount = gameResults.filter((result) => result.winningTickets > 0).length;
+  const totalWinningTickets = gameResults.reduce(
+    (total, result) => total + result.winningTickets,
+    0,
+  );
+  const finalBalance = totalPrize - totalCost;
+  const hitSummary = useMemo(() => {
+    const summary = Array.from({ length: Math.min(numberCount, 15) + 1 }, (_, hits) => ({
+      hits,
+      games: 0,
+      winningTickets: 0,
+      prize: 0,
+    }));
+    for (const result of gameResults) {
+      const bucket = summary[result.hits];
+      if (!bucket) continue;
+      bucket.games += 1;
+      bucket.winningTickets += result.winningTickets;
+      bucket.prize += result.prize;
+    }
+    return summary;
+  }, [gameResults, numberCount]);
   const columns = listWidth < 560 ? 1 : 2;
   const totalRows = Math.ceil(games.length / columns);
   const firstVisibleRow = Math.max(
@@ -153,6 +232,7 @@ function App() {
   }, []);
 
   useEffect(() => () => generationWorkerRef.current?.terminate(), []);
+  useEffect(() => () => contestRequestRef.current?.abort(), []);
   useEffect(() => {
     generate();
   }, []);
@@ -204,6 +284,90 @@ function App() {
     }
     setError('');
     setDrawSubmitted(parsedDraw);
+    setContestNumber('');
+    setContestInfo(null);
+  }
+
+  async function loadContest() {
+    const normalizedContestNumber = contestNumber.trim();
+    if (!/^\d{1,5}$/.test(normalizedContestNumber) || Number(normalizedContestNumber) < 1) {
+      setContestError('Digite um número de concurso válido.');
+      return;
+    }
+
+    contestRequestRef.current?.abort();
+    const controller = new AbortController();
+    contestRequestRef.current = controller;
+    setIsLoadingContest(true);
+    setContestError('');
+    setContestPrizeError('');
+    setError('');
+    setDrawSubmitted(null);
+    setDrawText('');
+    setContestInfo(null);
+    setIsOfficialPrizeRate(false);
+
+    try {
+      const response = await fetch(
+        `https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/${normalizedContestNumber}`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) {
+        throw new Error(
+          response.status === 404
+            ? 'Concurso não encontrado. Confira o número e tente novamente.'
+            : `A Caixa retornou o erro ${response.status} ao consultar o concurso.`,
+        );
+      }
+
+      const data = (await response.json()) as CaixaContest;
+      if (
+        data.numero !== Number(normalizedContestNumber) ||
+        !Array.isArray(data.listaDezenas)
+      ) {
+        throw new Error('A resposta da Caixa não contém um resultado válido para esse concurso.');
+      }
+
+      const result = parseDraw(data.listaDezenas.join(','));
+      if (!result) {
+        throw new Error('O concurso foi localizado, mas as dezenas sorteadas são inválidas.');
+      }
+
+      setDrawSubmitted(result);
+      setDrawText(result.map((number) => String(number).padStart(2, '0')).join(', '));
+      setContestNumber(String(data.numero));
+      setContestInfo({ number: data.numero, date: data.dataApuracao ?? '' });
+
+      const officialPrizes = data.listaRateioPremio ?? [];
+      const officialPrizeValues = PRIZE_BANDS.map((band) => getContestPrize(officialPrizes, band));
+      if (officialPrizeValues.every((value) => value !== undefined)) {
+        const nextPrizes = { ...prizes };
+        PRIZE_BANDS.forEach((band, index) => {
+          const value = officialPrizeValues[index];
+          if (value !== undefined) nextPrizes[band] = value;
+        });
+        setPrizes(nextPrizes);
+        setIsOfficialPrizeRate(true);
+        setContestPrizeError('');
+      } else {
+        setIsOfficialPrizeRate(false);
+        setContestPrizeError(
+          'O resultado foi encontrado, mas o rateio oficial não está disponível. Informe os valores manualmente.',
+        );
+      }
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
+      setContestError(
+        loadError instanceof Error
+          ? loadError.message
+          : 'Não foi possível consultar esse concurso. Tente novamente.',
+      );
+    } finally {
+      if (contestRequestRef.current === controller) {
+        contestRequestRef.current = null;
+        setIsLoadingContest(false);
+      }
+    }
   }
 
   function exportGames() {
@@ -217,16 +381,29 @@ function App() {
       custoPorJogo: gameCost,
       custoTotal: totalCost,
       resultadoConferido: drawSubmitted,
+      concurso: contestInfo?.number ?? null,
+      dataApuracao: contestInfo?.date || null,
       premiosPorFaixa: prizes,
-      jogos: games.map((game) => {
-        const hits = drawSubmitted
-          ? game.numbers.filter((number) => drawSubmitted.includes(number)).length
-          : null;
+      resumo:
+        drawSubmitted && gameResults.length
+          ? {
+              custoTotal: totalCost,
+              premioTotal: totalPrize,
+              saldoFinal: finalBalance,
+              jogosPremiados: winningGameCount,
+              jogosComAcertos: gamesWithHitsCount,
+              apostasPremiadas: totalWinningTickets,
+              resumoPorAcertos: hitSummary,
+            }
+          : null,
+      jogos: games.map((game, index) => {
+        const result = gameResults[index];
         return {
           jogo: game.id,
           numeros: game.numbers,
-          acertos: hits,
-          premio: hits && hits >= 11 ? prizes[hits as PrizeBand] : hits === null ? null : 0,
+          acertos: result?.hits ?? null,
+          apostasPremiadas: result?.winningTickets ?? null,
+          premio: result?.prize ?? null,
         };
       }),
     };
@@ -369,12 +546,9 @@ function App() {
                     {visibleRows.map((row, rowOffset) => (
                       <div className={`game-row ${columns === 1 ? 'one-column' : 'two-columns'}`} key={firstVisibleRow + rowOffset}>
                         {row.map((game) => {
-                          const hits = drawSubmitted
-                            ? game.numbers.filter((number) => drawSubmitted.includes(number)).length
-                            : null;
-                          const prize = hits !== null && hits >= 11 ? prizes[hits as PrizeBand] : 0;
+                          const result = drawSubmitted ? gameResults[game.id - 1] : null;
                           return (
-                            <article className={`game-card${hits !== null && hits >= 11 ? ' winner-card' : ''}`} key={game.id}>
+                            <article className={`game-card${result && result.prize > 0 ? ' winner-card' : ''}`} key={game.id}>
                               <div className="game-card-head">
                                 <div className="game-name"><span className="ticket-icon"><Icon name="ticket" size={15} /></span><strong>Jogo {String(game.id).padStart(2, '0')}</strong><span className="game-meta">{numberCount} dezenas</span></div>
                                 <span className="game-price">{formatCurrency(gameCost)}</span>
@@ -388,8 +562,11 @@ function App() {
                               </div>
                               <div className="game-card-foot">
                                 <span>{game.numbers.length} dezenas selecionadas</span>
-                                {hits !== null
-                                  ? <span className={`result-pill${hits >= 11 ? ' prize-pill' : ''}`}>{hits} acertos <b>{hits >= 11 ? `· ${formatCurrency(prize)}` : ''}</b></span>
+                                {result
+                                  ? <>
+                                      <span>{result.hits} dezenas sorteadas · {result.winningTickets} premiadas</span>
+                                      <strong className={`game-prize-total${result.prize > 0 ? ' prize-pill' : ''}`}>Prêmio {formatCurrency(result.prize)}</strong>
+                                    </>
                                   : <span className="waiting-pill">Aguardando conferência</span>}
                               </div>
                             </article>
@@ -410,27 +587,79 @@ function App() {
           <div className="check-intro">
             <span className="section-kicker">CONFERÊNCIA</span>
             <h2>Confira seus jogos</h2>
-            <p>Insira as 15 dezenas sorteadas para conferir automaticamente cada combinação.</p>
+            <p>Digite o número do concurso para carregar o resultado e o rateio oficiais.</p>
           </div>
           <div className="check-panel">
             <div className="draw-input-area">
-              <label className="field-label" htmlFor="drawNumbers">Dezenas sorteadas</label>
-              <textarea id="drawNumbers" rows={2} placeholder="Ex.: 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15" value={drawText} onChange={(event) => { setDrawText(event.target.value); setError(''); }} />
-              <div className={`input-status${drawText && parsedDraw ? ' valid' : ''}`}>{drawText && parsedDraw ? <><Icon name="check" size={14} /> 15 dezenas válidas</> : 'Separe os números por vírgula ou espaço (01–25).'}</div>
-              {error && <div className="error-message" role="alert">{error}</div>}
-              <button className="primary-button check-button" type="button" onClick={checkGames}><Icon name="check" size={17} /> Conferir {games.length} jogos</button>
+              <label className="field-label" htmlFor="contestNumber">Número do concurso</label>
+              <div className="contest-lookup">
+                <input
+                  id="contestNumber"
+                  type="number"
+                  min={1}
+                  max={99999}
+                  placeholder="Ex.: 3814"
+                  value={contestNumber}
+                  disabled={isLoadingContest}
+                  onChange={(event) => {
+                    setContestNumber(event.target.value);
+                    setContestError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void loadContest();
+                  }}
+                />
+                <button className="primary-button" type="button" onClick={() => void loadContest()} disabled={isLoadingContest}>
+                  <Icon name={isLoadingContest ? 'refresh' : 'check'} size={16} />
+                  {isLoadingContest ? 'Buscando...' : 'Buscar concurso'}
+                </button>
+              </div>
+              {contestError && <div className="error-message" role="alert">{contestError}</div>}
+              {contestInfo && (
+                <div className="contest-loaded" role="status">
+                  <Icon name="check" size={14} />
+                  Concurso {contestInfo.number}{contestInfo.date ? ` · ${contestInfo.date}` : ''} carregado
+                </div>
+              )}
+              {drawSubmitted && (
+                <div className="loaded-numbers">
+                  <span className="field-label">Dezenas sorteadas</span>
+                  {drawSubmitted.map((number) => (
+                    <span key={number}>{String(number).padStart(2, '0')}</span>
+                  ))}
+                </div>
+              )}
+              <details className="manual-draw">
+                <summary>Ou informar o resultado manualmente</summary>
+                <label className="field-label" htmlFor="drawNumbers">15 dezenas sorteadas</label>
+                <textarea id="drawNumbers" rows={2} placeholder="Ex.: 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15" value={drawText} onChange={(event) => {
+                  setDrawText(event.target.value);
+                  setDrawSubmitted(null);
+                  setContestNumber('');
+                  setContestInfo(null);
+                  setIsOfficialPrizeRate(false);
+                  setContestPrizeError('');
+                  setError('');
+                }} />
+                <div className={`input-status${drawText && parsedDraw ? ' valid' : ''}`}>{drawText && parsedDraw ? <><Icon name="check" size={14} /> 15 dezenas válidas</> : 'Separe os números por vírgula ou espaço (01–25).'}</div>
+                {error && <div className="error-message" role="alert">{error}</div>}
+                <button className="primary-button check-button" type="button" onClick={checkGames}><Icon name="check" size={17} /> Conferir manualmente</button>
+              </details>
             </div>
             <div className="prize-area">
-              <div className="prize-heading"><div><span className="section-kicker">RATEIO DO CONCURSO</span><h3>Prêmio por faixa</h3></div><span className="edit-tag">EDITÁVEL</span></div>
+              <div className="prize-heading"><div><span className="section-kicker">RATEIO DO CONCURSO</span><h3>Prêmio por faixa</h3></div><span className="edit-tag">{isOfficialPrizeRate ? 'RATEIO OFICIAL' : contestInfo ? 'EDITADO' : 'EDITÁVEL'}</span></div>
               <div className="prize-fields">
                 {PRIZE_BANDS.map((band) => (
                   <label key={band} className="prize-field" htmlFor={`prize-${band}`}>
                     <span>{PRIZE_LABELS[band]}</span>
-                    <span className="prize-value"><small>R$</small><input id={`prize-${band}`} type="number" min={0} step={band <= 13 ? 1 : 100} value={prizes[band]} onChange={(event) => setPrizes({ ...prizes, [band]: Math.max(0, Number(event.target.value) || 0) })} /></span>
+                    <span className="prize-value"><small>R$</small><input id={`prize-${band}`} type="number" min={0} step={band <= 13 ? 1 : 100} value={prizes[band]} onChange={(event) => {
+                      setPrizes({ ...prizes, [band]: Math.max(0, Number(event.target.value) || 0) });
+                      setIsOfficialPrizeRate(false);
+                    }} /></span>
                   </label>
                 ))}
               </div>
-              <p className="prize-footnote">Atualize os valores conforme o rateio oficial do concurso. As faixas de 14 e 15 acertos variam.</p>
+              <p className="prize-footnote">{contestPrizeError || (isOfficialPrizeRate ? 'Valores carregados do rateio oficial da Caixa. Você pode editá-los se necessário.' : contestInfo ? 'Resultado oficial carregado. Os valores do rateio foram editados manualmente.' : 'Sem rateio oficial carregado: informe os valores do concurso para calcular os prêmios.')}</p>
             </div>
           </div>
           {drawSubmitted && (
@@ -440,6 +669,58 @@ function App() {
             </div>
           )}
         </section>
+
+        {drawSubmitted && (
+          <section className="final-result" aria-label="Resultado final da conferência">
+            <div className="final-result-heading">
+              <div>
+                <span className="section-kicker">RESULTADO FINAL</span>
+                <h2>{contestInfo ? `Concurso ${contestInfo.number}` : 'Resumo da conferência'}{contestInfo?.date ? ` · ${contestInfo.date}` : ''}</h2>
+              </div>
+              <span className="result-games-count">{winningGameCount} de {games.length} jogos premiados</span>
+            </div>
+            <div className="final-totals">
+              <div><span>Jogos com acertos</span><strong>{gamesWithHitsCount.toLocaleString('pt-BR')} de {games.length.toLocaleString('pt-BR')}</strong></div>
+              <div><span>Jogos premiados (11+)</span><strong>{winningGameCount.toLocaleString('pt-BR')}</strong></div>
+              <div><span>Valor apostado</span><strong>{formatCurrency(totalCost)}</strong></div>
+              <div><span>Prêmios recebidos</span><strong>{formatCurrency(totalPrize)}</strong></div>
+              <div className={finalBalance >= 0 ? 'positive-balance' : 'negative-balance'}>
+                <span>{finalBalance >= 0 ? 'Lucro / saldo positivo' : 'Prejuízo / saldo negativo'}</span>
+                <strong>{formatCurrency(finalBalance)}</strong>
+              </div>
+            </div>
+            <p className="balance-note">O saldo é calculado subtraindo o custo total dos prêmios apurados nos jogos.</p>
+            <div className="hit-breakdown">
+              <div className="hit-breakdown-heading">
+                <h3>Jogos separados por acertos</h3>
+                <span>{games.length.toLocaleString('pt-BR')} jogos conferidos</span>
+              </div>
+              <div className="hit-breakdown-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Acertos</th>
+                      <th scope="col">Jogos</th>
+                      <th scope="col">Apostas premiadas</th>
+                      <th scope="col">Prêmio total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hitSummary.map((summary) => (
+                      <tr key={summary.hits} className={summary.winningTickets > 0 ? 'winning-tier' : ''}>
+                        <th scope="row">{summary.hits} acertos</th>
+                        <td>{summary.games.toLocaleString('pt-BR')}</td>
+                        <td>{summary.winningTickets.toLocaleString('pt-BR')}</td>
+                        <td>{formatCurrency(summary.prize)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="balance-note">Nas apostas com mais de 15 dezenas, uma aposta pode conter várias combinações premiadas de 15 dezenas.</p>
+            </div>
+          </section>
+        )}
 
         <section className="responsible-note">
           <div className="responsible-icon"><Icon name="info" size={17} /></div>

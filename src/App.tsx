@@ -12,6 +12,26 @@ type CaixaContest = {
   listaDezenas?: string[];
   listaRateioPremio?: CaixaPrize[];
 };
+type HistoricalContest = {
+  number: number;
+  date: string;
+  numbers: number[];
+  prizes: Record<PrizeBand, number>;
+};
+type BacktestHitBucket = { games: number; winningTickets: number; prize: number };
+type BacktestResult = {
+  contests: number;
+  averagePrizes: Record<PrizeBand, number>;
+  costPerContest: number;
+  totalCost: number;
+  totalPrize: number;
+  net: number;
+  roi: number;
+  profitableContests: number;
+  hitSummary: BacktestHitBucket[];
+  bestContest: { number: number; net: number } | null;
+  worstContest: { number: number; net: number } | null;
+};
 
 const BASE_PRICE = 3.5;
 const MAX_GAMES = 10_000;
@@ -85,6 +105,57 @@ function calculateGameResult(
   return { hits, prize, winningTickets };
 }
 
+function getOfficialContest(
+  contestNumber: number,
+  data: CaixaContest,
+): HistoricalContest | null {
+  if (
+    data.numero !== contestNumber ||
+    !Array.isArray(data.listaDezenas) ||
+    !Array.isArray(data.listaRateioPremio)
+  ) {
+    return null;
+  }
+  const numbers = parseDraw(data.listaDezenas.join(','));
+  if (!numbers) return null;
+  const contestPrizes = Object.fromEntries(
+    PRIZE_BANDS.map((band) => [band, getContestPrize(data.listaRateioPremio!, band)]),
+  ) as Partial<Record<PrizeBand, number>>;
+  if (PRIZE_BANDS.some((band) => contestPrizes[band] === undefined)) return null;
+  return {
+    number: contestNumber,
+    date: data.dataApuracao ?? '',
+    numbers,
+    prizes: contestPrizes as Record<PrizeBand, number>,
+  };
+}
+
+function getTheoreticalExpectedValue(
+  numberCount: number,
+  unitPrice: number,
+  prizes: Record<PrizeBand, number>,
+) {
+  const possibleDraws = choose(25, 15);
+  let expectedPrizePerSimpleBet = 0;
+  let winningDraws = 0;
+  for (const band of PRIZE_BANDS) {
+    const drawOutcomes = choose(15, band) * choose(10, 15 - band);
+    winningDraws += drawOutcomes;
+    expectedPrizePerSimpleBet += (drawOutcomes / possibleDraws) * prizes[band];
+  }
+  const simpleBetsPerGame = choose(numberCount, 15);
+  const costPerGame = simpleBetsPerGame * unitPrice;
+  const expectedPrizePerGame = simpleBetsPerGame * expectedPrizePerSimpleBet;
+  return {
+    expectedPrizePerGame,
+    expectedNetPerGame: expectedPrizePerGame - costPerGame,
+    roi: costPerGame > 0 ? ((expectedPrizePerGame - costPerGame) / costPerGame) * 100 : 0,
+    chanceOfPrize: winningDraws / possibleDraws,
+    expectedPrizePerSimpleBet,
+    costPerGame,
+  };
+}
+
 function Icon({
   name,
   size = 18,
@@ -121,6 +192,7 @@ function App() {
   const [quantity, setQuantity] = useState(8);
   const [numberCount, setNumberCount] = useState(15);
   const [model, setModel] = useState<Model>('diversified');
+  const [generatedModel, setGeneratedModel] = useState<Model | null>(null);
   const [unitPrice, setUnitPrice] = useState(BASE_PRICE);
   const [games, setGames] = useState<Game[]>([]);
   const [drawText, setDrawText] = useState('');
@@ -141,20 +213,32 @@ function App() {
   const [contestPrizeError, setContestPrizeError] = useState('');
   const [isOfficialPrizeRate, setIsOfficialPrizeRate] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [backtestCount, setBacktestCount] = useState(25);
+  const [isRunningBacktest, setIsRunningBacktest] = useState(false);
+  const [backtestProgress, setBacktestProgress] = useState(0);
+  const [backtestError, setBacktestError] = useState('');
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [listWidth, setListWidth] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const gameListRef = useRef<HTMLDivElement>(null);
   const generationWorkerRef = useRef<Worker | null>(null);
   const contestRequestRef = useRef<AbortController | null>(null);
+  const backtestRequestRef = useRef<AbortController | null>(null);
+  const backtestWorkerRef = useRef<Worker | null>(null);
+  const contestCacheRef = useRef(new Map<number, HistoricalContest>());
   const parsedDraw = useMemo(() => parseDraw(drawText), [drawText]);
   const ticketCount = choose(numberCount, 15);
-  const gameCost = unitPrice * ticketCount;
+  const selectedGameCost = unitPrice * ticketCount;
+  const selectedBatchCost = selectedGameCost * quantity;
+  const generatedNumberCount = games[0]?.numbers.length ?? numberCount;
+  const gameTicketCount = choose(generatedNumberCount, 15);
+  const gameCost = unitPrice * gameTicketCount;
   const totalCost = gameCost * games.length;
   const currentModel = {
     balanced: 'Equilibrado',
     diversified: 'Diversificado',
     random: 'Aleatório',
-  }[model];
+  }[generatedModel ?? model];
   const gameResults = useMemo(
     () =>
       drawSubmitted
@@ -170,8 +254,17 @@ function App() {
     0,
   );
   const finalBalance = totalPrize - totalCost;
+  const theoreticalValue = useMemo(
+    () =>
+      getTheoreticalExpectedValue(
+        generatedNumberCount,
+        unitPrice,
+        backtestResult?.averagePrizes ?? prizes,
+      ),
+    [backtestResult?.averagePrizes, generatedNumberCount, prizes, unitPrice],
+  );
   const hitSummary = useMemo(() => {
-    const summary = Array.from({ length: Math.min(numberCount, 15) + 1 }, (_, hits) => ({
+    const summary = Array.from({ length: Math.min(generatedNumberCount, 15) + 1 }, (_, hits) => ({
       hits,
       games: 0,
       winningTickets: 0,
@@ -185,7 +278,7 @@ function App() {
       bucket.prize += result.prize;
     }
     return summary;
-  }, [gameResults, numberCount]);
+  }, [gameResults, generatedNumberCount]);
   const columns = listWidth < 560 ? 1 : 2;
   const totalRows = Math.ceil(games.length / columns);
   const firstVisibleRow = Math.max(
@@ -233,12 +326,21 @@ function App() {
 
   useEffect(() => () => generationWorkerRef.current?.terminate(), []);
   useEffect(() => () => contestRequestRef.current?.abort(), []);
+  useEffect(() => () => backtestRequestRef.current?.abort(), []);
+  useEffect(() => () => backtestWorkerRef.current?.terminate(), []);
   useEffect(() => {
     generate();
   }, []);
 
   function generate() {
     generationWorkerRef.current?.terminate();
+    backtestRequestRef.current?.abort();
+    backtestWorkerRef.current?.terminate();
+    backtestWorkerRef.current = null;
+    setBacktestResult(null);
+    setIsRunningBacktest(false);
+    setBacktestProgress(0);
+    setBacktestError('');
     setIsGenerating(true);
     setDrawSubmitted(null);
     setError('');
@@ -253,6 +355,7 @@ function App() {
       generationWorkerRef.current = worker;
       worker.onmessage = (event: MessageEvent<Game[]>) => {
         setGames(event.data);
+        setGeneratedModel(model);
         setIsGenerating(false);
         generationWorkerRef.current = null;
         worker.terminate();
@@ -302,6 +405,7 @@ function App() {
     setContestError('');
     setContestPrizeError('');
     setError('');
+    setBacktestResult(null);
     setDrawSubmitted(null);
     setDrawText('');
     setContestInfo(null);
@@ -337,6 +441,8 @@ function App() {
       setDrawText(result.map((number) => String(number).padStart(2, '0')).join(', '));
       setContestNumber(String(data.numero));
       setContestInfo({ number: data.numero, date: data.dataApuracao ?? '' });
+      const historicalContest = getOfficialContest(data.numero, data);
+      if (historicalContest) contestCacheRef.current.set(data.numero, historicalContest);
 
       const officialPrizes = data.listaRateioPremio ?? [];
       const officialPrizeValues = PRIZE_BANDS.map((band) => getContestPrize(officialPrizes, band));
@@ -370,13 +476,137 @@ function App() {
     }
   }
 
+  async function fetchOfficialContest(
+    contestNumberToFetch: number,
+    signal: AbortSignal,
+  ): Promise<HistoricalContest> {
+    const cached = contestCacheRef.current.get(contestNumberToFetch);
+    if (cached) return cached;
+
+    const response = await fetch(
+      `https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil/${contestNumberToFetch}`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Não foi possível carregar o concurso ${contestNumberToFetch} (erro ${response.status}).`,
+      );
+    }
+
+    const data = (await response.json()) as CaixaContest;
+    const contest = getOfficialContest(contestNumberToFetch, data);
+    if (!contest) {
+      throw new Error(`O concurso ${contestNumberToFetch} não retornou dezenas e rateio válidos.`);
+    }
+    contestCacheRef.current.set(contestNumberToFetch, contest);
+    return contest;
+  }
+
+  async function runBacktest() {
+    if (games.length === 0) {
+      setBacktestError('Gere os jogos antes de iniciar a análise.');
+      return;
+    }
+
+    backtestRequestRef.current?.abort();
+    backtestWorkerRef.current?.terminate();
+    const controller = new AbortController();
+    backtestRequestRef.current = controller;
+    setIsRunningBacktest(true);
+    setBacktestProgress(0);
+    setBacktestError('');
+    setBacktestResult(null);
+    let analysisWorker: Worker | null = null;
+
+    try {
+      let endContestNumber = contestInfo?.number;
+      if (!endContestNumber) {
+        const latestResponse = await fetch(
+          'https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil',
+          { signal: controller.signal },
+        );
+        if (!latestResponse.ok) {
+          throw new Error(`A Caixa retornou o erro ${latestResponse.status} ao consultar o último concurso.`);
+        }
+        const latestData = (await latestResponse.json()) as CaixaContest;
+        endContestNumber = latestData.numero;
+        if (!endContestNumber) {
+          throw new Error('A Caixa não informou o número do concurso mais recente.');
+        }
+        const latestContest = getOfficialContest(endContestNumber, latestData);
+        if (!latestContest) {
+          throw new Error('O último concurso não retornou dezenas e rateio válidos.');
+        }
+        contestCacheRef.current.set(endContestNumber, latestContest);
+      }
+
+      const contestNumbers = Array.from(
+        { length: backtestCount },
+        (_, index) => endContestNumber! - index,
+      ).filter((number) => number > 0);
+      const contests: HistoricalContest[] = [];
+      const batchSize = 3;
+
+      for (let index = 0; index < contestNumbers.length; index += batchSize) {
+        const batch = contestNumbers.slice(index, index + batchSize);
+        const results = await Promise.all(
+          batch.map((number) => fetchOfficialContest(number, controller.signal)),
+        );
+        contests.push(...results);
+        setBacktestProgress(contests.length);
+      }
+
+      contests.sort((left, right) => left.number - right.number);
+      const worker = new Worker(new URL('./historicalAnalysis.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      analysisWorker = worker;
+      backtestWorkerRef.current = worker;
+      const result = await new Promise<BacktestResult>((resolve, reject) => {
+        const handleAbort = () => reject(new DOMException('Análise cancelada.', 'AbortError'));
+        controller.signal.addEventListener('abort', handleAbort, { once: true });
+        worker.onmessage = (event: MessageEvent<BacktestResult>) => {
+          controller.signal.removeEventListener('abort', handleAbort);
+          resolve(event.data);
+        };
+        worker.onerror = (event) => {
+          event.preventDefault();
+          controller.signal.removeEventListener('abort', handleAbort);
+          reject(new Error(event.message || 'Falha ao calcular o backtest.'));
+        };
+        worker.postMessage({ games, contests, unitPrice });
+      });
+      if (controller.signal.aborted) return;
+      setBacktestResult(result);
+    } catch (backtestFailure) {
+      if (backtestFailure instanceof DOMException && backtestFailure.name === 'AbortError') return;
+      controller.abort();
+      setBacktestError(
+        backtestFailure instanceof Error
+          ? backtestFailure instanceof TypeError
+            ? 'A Caixa não respondeu. Verifique a conexão, aguarde um pouco e tente novamente.'
+            : backtestFailure.message
+          : 'Não foi possível concluir o backtest.',
+      );
+    } finally {
+      analysisWorker?.terminate();
+      if (backtestWorkerRef.current === analysisWorker) {
+        backtestWorkerRef.current = null;
+      }
+      if (backtestRequestRef.current === controller) {
+        backtestRequestRef.current = null;
+        setIsRunningBacktest(false);
+      }
+    }
+  }
+
   function exportGames() {
     const data = {
       loteria: 'Lotofácil',
       geradoEm: new Date().toISOString(),
       estrategia: currentModel,
       quantidadeDeApostas: games.length,
-      numerosPorAposta: numberCount,
+      numerosPorAposta: generatedNumberCount,
       precoDaApostaSimples: unitPrice,
       custoPorJogo: gameCost,
       custoTotal: totalCost,
@@ -493,8 +723,8 @@ function App() {
               <div className="field-hint price-hint">Valor editável por combinação de 15 dezenas.</div>
 
               <div className="cost-preview">
-                <div><span>Custo por jogo</span><strong>{formatCurrency(gameCost)}</strong></div>
-                <div><span>Investimento do lote</span><strong className="total-cost">{formatCurrency(totalCost)}</strong></div>
+                <div><span>Custo por jogo</span><strong>{formatCurrency(selectedGameCost)}</strong></div>
+                <div><span>Investimento do lote</span><strong className="total-cost">{formatCurrency(selectedBatchCost)}</strong></div>
                 {ticketCount > 1 && <small>{ticketCount} combinações simples por jogo de {numberCount} dezenas</small>}
               </div>
 
@@ -520,7 +750,7 @@ function App() {
             </div>
             <div className="games-summary">
               <span><span className="summary-dot" /> Método: <strong>{currentModel}</strong></span>
-              <span><Icon name="ticket" size={15} /> {games.length * ticketCount} combinações simples</span>
+              <span><Icon name="ticket" size={15} /> {games.length * gameTicketCount} combinações simples</span>
               <span className="summary-range">{games.length ? `${firstVisibleGame}–${lastVisibleGame} de ${games.length} jogos` : 'Nenhum jogo gerado'}</span>
               <span className="summary-total">Total <strong>{formatCurrency(totalCost)}</strong></span>
             </div>
@@ -550,7 +780,7 @@ function App() {
                           return (
                             <article className={`game-card${result && result.prize > 0 ? ' winner-card' : ''}`} key={game.id}>
                               <div className="game-card-head">
-                                <div className="game-name"><span className="ticket-icon"><Icon name="ticket" size={15} /></span><strong>Jogo {String(game.id).padStart(2, '0')}</strong><span className="game-meta">{numberCount} dezenas</span></div>
+                                <div className="game-name"><span className="ticket-icon"><Icon name="ticket" size={15} /></span><strong>Jogo {String(game.id).padStart(2, '0')}</strong><span className="game-meta">{game.numbers.length} dezenas</span></div>
                                 <span className="game-price">{formatCurrency(gameCost)}</span>
                               </div>
                               <div className="number-grid" aria-label={`Números escolhidos do jogo ${game.id}`}>
@@ -719,6 +949,123 @@ function App() {
               </div>
               <p className="balance-note">Nas apostas com mais de 15 dezenas, uma aposta pode conter várias combinações premiadas de 15 dezenas.</p>
             </div>
+          </section>
+        )}
+
+        {games.length > 0 && (
+          <section className="strategy-analysis" aria-label="Análise matemática e backtest">
+            <div className="analysis-heading">
+              <div>
+                <span className="section-kicker">EXPECTATIVA E HISTÓRICO</span>
+                <h2>Essa estratégia dá retorno?</h2>
+                <p>Compare o valor esperado matemático com o resultado real em concursos anteriores.</p>
+              </div>
+              <span className="analysis-model">{currentModel} · {games.length.toLocaleString('pt-BR')} jogos</span>
+            </div>
+
+            <div className="expected-value-panel">
+              <div className="analysis-subheading">
+                <div>
+                  <h3>Valor esperado por concurso</h3>
+                  <span>{backtestResult ? `Baseado no rateio médio dos últimos ${backtestResult.contests} concursos` : isOfficialPrizeRate ? `Usando o rateio oficial do concurso ${contestInfo?.number}` : 'Usando os valores de prêmio informados manualmente'}</span>
+                </div>
+                <span className="probability-note">{(theoreticalValue.chanceOfPrize * 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}% de chance de prêmio por combinação simples</span>
+              </div>
+              <div className="expected-value-stats">
+                <div><span>Custo dos jogos</span><strong>{formatCurrency(theoreticalValue.costPerGame * games.length)}</strong></div>
+                <div><span>Prêmio esperado</span><strong>{formatCurrency(theoreticalValue.expectedPrizePerGame * games.length)}</strong></div>
+                <div className={theoreticalValue.expectedNetPerGame >= 0 ? 'positive-balance' : 'negative-balance'}>
+                  <span>Saldo esperado</span>
+                  <strong>{formatCurrency(theoreticalValue.expectedNetPerGame * games.length)}</strong>
+                </div>
+                <div><span>Retorno estimado</span><strong>{theoreticalValue.roi.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</strong></div>
+              </div>
+              <p className="analysis-caveat">O valor esperado é uma média matemática, não uma previsão. As dezenas escolhidas não mudam as probabilidades; valores de 14 e 15 acertos podem variar ou acumular.</p>
+            </div>
+
+            <div className="backtest-panel">
+              <div className="backtest-controls">
+                <div>
+                  <h3>Backtest nos concursos anteriores</h3>
+                  <p>Reaplica os mesmos jogos nos resultados oficiais e soma o custo e os prêmios de cada concurso.</p>
+                </div>
+                <div className="backtest-actions">
+                  <label className="sr-only" htmlFor="backtestCount">Quantidade de concursos</label>
+                  <select id="backtestCount" value={backtestCount} disabled={isRunningBacktest} onChange={(event) => setBacktestCount(Number(event.target.value))}>
+                    <option value={25}>25 concursos</option>
+                    <option value={50}>50 concursos</option>
+                    <option value={100}>100 concursos</option>
+                  </select>
+                  <button type="button" className="primary-button" onClick={() => void runBacktest()} disabled={isRunningBacktest || isGenerating}>
+                    <Icon name={isRunningBacktest ? 'refresh' : 'dice'} size={16} />
+                    {isRunningBacktest ? 'Analisando...' : 'Executar backtest'}
+                  </button>
+                </div>
+              </div>
+
+              {isRunningBacktest && (
+                <div className="backtest-progress" role="status">
+                  <div className="progress-track"><span style={{ width: `${backtestCount ? (backtestProgress / backtestCount) * 100 : 0}%` }} /></div>
+                  <span>{backtestProgress} de {backtestCount} concursos carregados{backtestProgress === backtestCount ? ' · calculando resultados' : ''}</span>
+                </div>
+              )}
+              {backtestError && <p className="backtest-error" role="alert">{backtestError}</p>}
+
+              {backtestResult && (
+                <div className="backtest-results">
+                  <div className="backtest-result-heading">
+                    <h3>Resultado do backtest</h3>
+                    <span>{backtestResult.contests} concursos · {(backtestResult.contests * games.length).toLocaleString('pt-BR')} análises de jogo</span>
+                  </div>
+                  <div className="expected-value-stats backtest-stats">
+                    <div><span>Total investido</span><strong>{formatCurrency(backtestResult.totalCost)}</strong></div>
+                    <div><span>Prêmios históricos</span><strong>{formatCurrency(backtestResult.totalPrize)}</strong></div>
+                    <div className={backtestResult.net >= 0 ? 'positive-balance' : 'negative-balance'}>
+                      <span>{backtestResult.net >= 0 ? 'Lucro histórico' : 'Prejuízo histórico'}</span>
+                      <strong>{formatCurrency(backtestResult.net)}</strong>
+                    </div>
+                    <div className={backtestResult.roi >= 0 ? 'positive-balance' : 'negative-balance'}>
+                      <span>Retorno líquido</span>
+                      <strong>{backtestResult.roi.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%</strong>
+                    </div>
+                  </div>
+                  <div className="backtest-period-summary">
+                    <span><strong>{backtestResult.profitableContests}</strong> de {backtestResult.contests} concursos deram saldo positivo</span>
+                    {backtestResult.bestContest && <span>Melhor: <strong>#{backtestResult.bestContest.number}</strong> · {formatCurrency(backtestResult.bestContest.net)}</span>}
+                    {backtestResult.worstContest && <span>Pior: <strong>#{backtestResult.worstContest.number}</strong> · {formatCurrency(backtestResult.worstContest.net)}</span>}
+                  </div>
+                  <div className="hit-breakdown backtest-breakdown">
+                    <div className="hit-breakdown-heading">
+                      <h3>Frequência de acertos no histórico</h3>
+                      <span>{(backtestResult.contests * games.length).toLocaleString('pt-BR')} resultados de jogo</span>
+                    </div>
+                    <div className="hit-breakdown-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th scope="col">Acertos</th>
+                            <th scope="col">Ocorrências</th>
+                            <th scope="col">Apostas premiadas</th>
+                            <th scope="col">Prêmio total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backtestResult.hitSummary.slice(0, generatedNumberCount + 1).map((summary, hits) => (
+                            <tr key={hits} className={summary.winningTickets > 0 ? 'winning-tier' : ''}>
+                              <th scope="row">{hits} acertos</th>
+                              <td>{summary.games.toLocaleString('pt-BR')}</td>
+                              <td>{summary.winningTickets.toLocaleString('pt-BR')}</td>
+                              <td>{formatCurrency(summary.prize)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <p className="analysis-disclaimer">Backtest é uma avaliação retrospectiva: resultados passados não alteram as chances nem indicam lucro futuro. A API oficial da Caixa é necessária para carregar o histórico.</p>
           </section>
         )}
 

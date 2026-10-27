@@ -225,6 +225,40 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
 .hit-breakdown tbody tr.winning-tier td:last-child { color: #26734a; font-weight: 600; }
 .hit-breakdown > .balance-note { margin-top: 9px; }
 
+.strategy-analysis { margin-top: 23px; padding: 23px 24px; border: 1px solid #e4e9e1; border-radius: 8px; background: #fff; }
+.analysis-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.analysis-heading h2 { margin: 5px 0 0; color: #263d2d; font: 600 19px 'Manrope', sans-serif; }
+.analysis-heading p, .backtest-controls p { margin: 6px 0 0; color: #839087; font-size: 10px; line-height: 1.6; }
+.analysis-model { padding: 6px 9px; border: 1px solid #e3ebe1; border-radius: 4px; color: #59715e; background: #f7faf6; font-size: 9px; white-space: nowrap; }
+.expected-value-panel, .backtest-panel { margin-top: 18px; padding: 16px; border: 1px solid #e7ece5; border-radius: 6px; background: #fafbf9; }
+.analysis-subheading, .backtest-result-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.analysis-subheading h3, .backtest-controls h3, .backtest-result-heading h3 { margin: 0; color: #354a3a; font: 600 13px 'Manrope', sans-serif; }
+.analysis-subheading > div > span, .backtest-result-heading > span { display: block; margin-top: 4px; color: #879389; font-size: 8px; }
+.probability-note { color: #55745b; font-size: 9px; text-align: right; }
+.expected-value-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
+.expected-value-stats > div { min-height: 61px; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 9px 10px; border: 1px solid #e7ece5; border-radius: 5px; background: #fff; }
+.expected-value-stats span { color: #879188; font-size: 8px; }
+.expected-value-stats strong { color: #35473a; font: 600 12px 'DM Mono', monospace; }
+.expected-value-stats .positive-balance strong, .expected-value-stats .positive-balance span { color: #23734b; }
+.expected-value-stats .negative-balance strong, .expected-value-stats .negative-balance span { color: #a7493d; }
+.analysis-caveat, .analysis-disclaimer { margin: 10px 0 0; color: #8c978d; font-size: 8px; line-height: 1.6; }
+.backtest-controls { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.backtest-controls > div:first-child { max-width: 500px; }
+.backtest-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.backtest-actions select { height: 38px; padding: 0 9px; border: 1px solid #e1e7df; border-radius: 5px; color: #526457; background: #fff; font-size: 9px; }
+.backtest-actions .primary-button { width: auto; height: 38px; margin: 0; padding: 0 12px; white-space: nowrap; }
+.backtest-actions .primary-button:disabled { cursor: wait; opacity: .7; }
+.backtest-progress { display: grid; grid-template-columns: minmax(100px, 1fr) auto; align-items: center; gap: 10px; margin-top: 15px; color: #728174; font-size: 8px; }
+.progress-track { height: 6px; overflow: hidden; border-radius: 4px; background: #e8eee6; }
+.progress-track span { display: block; height: 100%; border-radius: inherit; background: #4a8b5a; transition: width .15s ease; }
+.backtest-error { margin: 12px 0 0; color: #a63e36; font-size: 9px; }
+.backtest-results { margin-top: 18px; padding-top: 16px; border-top: 1px solid #e6ebe3; }
+.backtest-period-summary { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 12px; color: #77857a; font-size: 9px; }
+.backtest-period-summary strong { color: #3e5b45; font-weight: 600; }
+.backtest-breakdown { margin-top: 16px; }
+.analysis-disclaimer { margin-top: 13px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
 .responsible-note { display: flex; align-items: center; gap: 12px; margin-top: 23px; padding: 14px 17px; border: 1px solid #e5eae3; border-radius: 6px; background: #f9faf7; }
 .responsible-icon { display: grid; place-items: center; flex: 0 0 auto; width: 29px; height: 29px; border-radius: 50%; color: #788e7b; background: #edf2eb; }
 .responsible-note strong { color: #59695b; font-size: 9px; }
@@ -250,6 +284,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
   .check-panel { grid-template-columns: 1fr; gap: 20px; }
   .draw-input-area { padding-right: 0; padding-bottom: 18px; border-right: 0; border-bottom: 1px solid #edf0eb; }
   .final-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .expected-value-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .backtest-controls { align-items: flex-start; flex-direction: column; }
   .footer { padding-right: 24px; padding-left: 24px; }
 }
 @media (max-width: 640px) {
@@ -290,6 +326,15 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 34px; }
   .final-result-heading { align-items: flex-start; flex-direction: column; }
   .hit-breakdown-heading { align-items: flex-start; flex-direction: column; }
   .hit-breakdown th, .hit-breakdown td { padding: 8px 6px; font-size: 8px; }
+  .strategy-analysis { padding: 18px 15px; }
+  .analysis-heading { flex-direction: column; gap: 9px; }
+  .analysis-subheading { align-items: flex-start; flex-direction: column; }
+  .probability-note { text-align: left; }
+  .backtest-actions { width: 100%; }
+  .backtest-actions select { flex: 1; }
+  .backtest-actions .primary-button { flex: 1; padding: 0 8px; font-size: 9px; }
+  .backtest-progress { grid-template-columns: 1fr; }
+  .backtest-result-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
   .prize-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 11px; }
   .check-result-bar { align-items: flex-start; gap: 9px; }
   .check-result-bar > div { flex-wrap: wrap; gap: 6px; }
